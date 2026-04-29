@@ -24,10 +24,11 @@ export default function OtpScreen() {
   const router = useRouter();
   const { phone, verifyOtp } = useAuth();
 
-  const [digits, setDigits] = useState<string[]>(Array(OTP_LENGTH).fill(""));
+  const [code, setCode] = useState<string>("");
+  const [focused, setFocused] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [secondsLeft, setSecondsLeft] = useState<number>(30);
-  const inputs = useRef<Array<TextInput | null>>([]);
+  const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -35,36 +36,17 @@ export default function OtpScreen() {
     return () => clearTimeout(t);
   }, [secondsLeft]);
 
-  const code = digits.join("");
   const isValid = code.length === OTP_LENGTH;
 
-  const onChange = (index: number, text: string) => {
-    const cleaned = text.replace(/\D/g, "");
-    if (cleaned.length > 1) {
-      // Handle paste
-      const next = [...digits];
-      for (let i = 0; i < OTP_LENGTH; i++) {
-        next[i] = cleaned[i] ?? "";
-      }
-      setDigits(next);
-      const lastIndex = Math.min(cleaned.length, OTP_LENGTH) - 1;
-      inputs.current[lastIndex]?.blur();
-      return;
-    }
-    const next = [...digits];
-    next[index] = cleaned;
-    setDigits(next);
-    if (cleaned && index < OTP_LENGTH - 1) {
-      inputs.current[index + 1]?.focus();
-    }
-  };
-
-  const onKeyPress = (index: number, key: string) => {
-    if (key === "Backspace" && !digits[index] && index > 0) {
-      inputs.current[index - 1]?.focus();
-      const next = [...digits];
-      next[index - 1] = "";
-      setDigits(next);
+  const handleChange = (text: string) => {
+    const cleaned = text.replace(/\D/g, "").slice(0, OTP_LENGTH);
+    setCode(cleaned);
+    if (
+      Platform.OS !== "web" &&
+      cleaned.length > code.length &&
+      cleaned.length <= OTP_LENGTH
+    ) {
+      Haptics.selectionAsync();
     }
   };
 
@@ -85,6 +67,10 @@ export default function OtpScreen() {
     if (Platform.OS !== "web") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
+  };
+
+  const focusInput = () => {
+    inputRef.current?.focus();
   };
 
   const formattedPhone = phone
@@ -128,39 +114,66 @@ export default function OtpScreen() {
         </Text>
         <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
           We sent a 6-digit code to your WhatsApp on{" "}
-          <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}>
+          <Text
+            style={{
+              color: colors.foreground,
+              fontFamily: "Inter_600SemiBold",
+            }}
+          >
             {formattedPhone}
           </Text>
         </Text>
 
         <View style={{ height: 36 }} />
 
-        <View style={styles.otpRow}>
-          {digits.map((d, i) => (
-            <TextInput
-              key={i}
-              ref={(r) => {
-                inputs.current[i] = r;
-              }}
-              value={d}
-              onChangeText={(t) => onChange(i, t)}
-              onKeyPress={({ nativeEvent }) => onKeyPress(i, nativeEvent.key)}
-              keyboardType="number-pad"
-              maxLength={1}
-              autoFocus={i === 0}
-              textContentType="oneTimeCode"
-              style={[
-                styles.otpBox,
-                {
-                  backgroundColor: colors.card,
-                  borderColor: d ? colors.primary : colors.border,
-                  borderRadius: 12,
-                  color: colors.foreground,
-                },
-              ]}
-            />
-          ))}
-        </View>
+        <Pressable onPress={focusInput} style={styles.otpWrap}>
+          <View style={styles.otpRow} pointerEvents="none">
+            {Array.from({ length: OTP_LENGTH }).map((_, i) => {
+              const digit = code[i] ?? "";
+              const isCurrent = focused && i === code.length;
+              const filled = !!digit;
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.otpBox,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: isCurrent
+                        ? colors.primary
+                        : filled
+                          ? colors.primary
+                          : colors.border,
+                      borderWidth: isCurrent || filled ? 2 : 1.5,
+                      borderRadius: 12,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[styles.otpDigit, { color: colors.foreground }]}
+                  >
+                    {digit}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+
+          <TextInput
+            ref={inputRef}
+            value={code}
+            onChangeText={handleChange}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            keyboardType="number-pad"
+            maxLength={OTP_LENGTH}
+            autoFocus
+            textContentType="oneTimeCode"
+            autoComplete={Platform.OS === "android" ? "sms-otp" : "one-time-code"}
+            caretHidden
+            style={styles.hiddenInput}
+          />
+        </Pressable>
 
         <View style={styles.resendRow}>
           {secondsLeft > 0 ? (
@@ -238,18 +251,35 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     lineHeight: 22,
   },
+  otpWrap: {
+    position: "relative",
+    width: "100%",
+  },
   otpRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 8,
+    width: "100%",
   },
   otpBox: {
-    flex: 1,
+    width: 48,
     height: 60,
-    borderWidth: 1.5,
-    textAlign: "center",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  otpDigit: {
     fontSize: 24,
     fontFamily: "Inter_700Bold",
+  },
+  hiddenInput: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    opacity: 0,
+    fontSize: 24,
+    color: "transparent",
+    ...(Platform.OS === "web" ? { outlineWidth: 0 } : {}),
   },
   resendRow: {
     marginTop: 20,
