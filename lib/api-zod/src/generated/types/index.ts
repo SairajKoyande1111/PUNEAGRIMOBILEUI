@@ -6,4 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./aadharData";
 export * from "./healthStatus";
+export * from "./ocrAadharBody";
+export * from "./upsertUserBody";
+export * from "./userProfile";

@@ -14,3 +14,95 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Get user by phone
+ */
+export const GetUserByPhoneParams = zod.object({
+  phone: zod.coerce.string(),
+});
+
+export const GetUserByPhoneResponse = zod.object({
+  phone: zod.string(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  aadhar: zod
+    .object({
+      name: zod.string().nullish(),
+      aadhaarNumber: zod.string().nullish(),
+      dateOfBirth: zod.string().nullish(),
+      gender: zod.string().nullish(),
+      address: zod.string().nullish(),
+      mobileNumber: zod.string().nullish(),
+      photoBase64: zod
+        .string()
+        .nullish()
+        .describe("The original Aadhaar card image (base64-encoded)"),
+      photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+});
+
+/**
+ * @summary Create or update user record
+ */
+export const UpsertUserBody = zod.object({
+  phone: zod.string(),
+});
+
+export const UpsertUserResponse = zod.object({
+  phone: zod.string(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  aadhar: zod
+    .object({
+      name: zod.string().nullish(),
+      aadhaarNumber: zod.string().nullish(),
+      dateOfBirth: zod.string().nullish(),
+      gender: zod.string().nullish(),
+      address: zod.string().nullish(),
+      mobileNumber: zod.string().nullish(),
+      photoBase64: zod
+        .string()
+        .nullish()
+        .describe("The original Aadhaar card image (base64-encoded)"),
+      photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+});
+
+/**
+ * Extracts Aadhaar fields using Chandra OCR (accurate mode) and saves to user profile.
+ * @summary Run OCR on an Aadhaar card image
+ */
+export const OcrAadharBody = zod.object({
+  phone: zod.string(),
+  imageBase64: zod
+    .string()
+    .describe("Base64-encoded image (without data URI prefix)"),
+  mimeType: zod.string().describe("MIME type of the uploaded image"),
+});
+
+export const OcrAadharResponse = zod.object({
+  phone: zod.string(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  aadhar: zod
+    .object({
+      name: zod.string().nullish(),
+      aadhaarNumber: zod.string().nullish(),
+      dateOfBirth: zod.string().nullish(),
+      gender: zod.string().nullish(),
+      address: zod.string().nullish(),
+      mobileNumber: zod.string().nullish(),
+      photoBase64: zod
+        .string()
+        .nullish()
+        .describe("The original Aadhaar card image (base64-encoded)"),
+      photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+});

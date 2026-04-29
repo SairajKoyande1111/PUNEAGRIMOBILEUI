@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: users
+    description: User profile operations
+  - name: ocr
+    description: Document OCR operations
 paths:
   /healthz:
     get:
@@ -24,6 +28,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /users/{phone}:
+    get:
+      operationId: getUserByPhone
+      tags: [users]
+      summary: Get user by phone
+      parameters:
+        - name: phone
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+  /users:
+    post:
+      operationId: upsertUser
+      tags: [users]
+      summary: Create or update user record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+              required: [phone]
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+  /ocr/aadhar:
+    post:
+      operationId: ocrAadhar
+      tags: [ocr]
+      summary: Run OCR on an Aadhaar card image
+      description: Extracts Aadhaar fields using Chandra OCR (accurate mode) and saves to user profile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                imageBase64:
+                  type: string
+                  description: Base64-encoded image (without data URI prefix)
+                mimeType:
+                  type: string
+                  description: MIME type of the uploaded image
+              required: [phone, imageBase64, mimeType]
+      responses:
+        "200":
+          description: Extracted Aadhaar data and updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +106,50 @@ components:
           type: string
       required:
         - status
-
+    AadharData:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        aadhaarNumber:
+          type: string
+          nullable: true
+        dateOfBirth:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        mobileNumber:
+          type: string
+          nullable: true
+        photoBase64:
+          type: string
+          nullable: true
+          description: The original Aadhaar card image (base64-encoded)
+        photoMimeType:
+          type: string
+          nullable: true
+        rawText:
+          type: string
+          nullable: true
+    UserProfile:
+      type: object
+      properties:
+        phone:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        aadhar:
+          $ref: "#/components/schemas/AadharData"
+          nullable: true
+      required:
+        - phone
+        - createdAt
+        - updatedAt

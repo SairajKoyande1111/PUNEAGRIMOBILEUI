@@ -5,18 +5,26 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  HealthStatus,
+  OcrAadharBody,
+  UpsertUserBody,
+  UserProfile,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -99,3 +107,263 @@ export function useHealthCheck<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get user by phone
+ */
+export const getGetUserByPhoneUrl = (phone: string) => {
+  return `/api/users/${phone}`;
+};
+
+export const getUserByPhone = async (
+  phone: string,
+  options?: RequestInit,
+): Promise<UserProfile> => {
+  return customFetch<UserProfile>(getGetUserByPhoneUrl(phone), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetUserByPhoneQueryKey = (phone: string) => {
+  return [`/api/users/${phone}`] as const;
+};
+
+export const getGetUserByPhoneQueryOptions = <
+  TData = Awaited<ReturnType<typeof getUserByPhone>>,
+  TError = ErrorType<unknown>,
+>(
+  phone: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getUserByPhone>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetUserByPhoneQueryKey(phone);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getUserByPhone>>> = ({
+    signal,
+  }) => getUserByPhone(phone, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!phone,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getUserByPhone>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetUserByPhoneQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getUserByPhone>>
+>;
+export type GetUserByPhoneQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get user by phone
+ */
+
+export function useGetUserByPhone<
+  TData = Awaited<ReturnType<typeof getUserByPhone>>,
+  TError = ErrorType<unknown>,
+>(
+  phone: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getUserByPhone>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetUserByPhoneQueryOptions(phone, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create or update user record
+ */
+export const getUpsertUserUrl = () => {
+  return `/api/users`;
+};
+
+export const upsertUser = async (
+  upsertUserBody: UpsertUserBody,
+  options?: RequestInit,
+): Promise<UserProfile> => {
+  return customFetch<UserProfile>(getUpsertUserUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(upsertUserBody),
+  });
+};
+
+export const getUpsertUserMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof upsertUser>>,
+    TError,
+    { data: BodyType<UpsertUserBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof upsertUser>>,
+  TError,
+  { data: BodyType<UpsertUserBody> },
+  TContext
+> => {
+  const mutationKey = ["upsertUser"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof upsertUser>>,
+    { data: BodyType<UpsertUserBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return upsertUser(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpsertUserMutationResult = NonNullable<
+  Awaited<ReturnType<typeof upsertUser>>
+>;
+export type UpsertUserMutationBody = BodyType<UpsertUserBody>;
+export type UpsertUserMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create or update user record
+ */
+export const useUpsertUser = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof upsertUser>>,
+    TError,
+    { data: BodyType<UpsertUserBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof upsertUser>>,
+  TError,
+  { data: BodyType<UpsertUserBody> },
+  TContext
+> => {
+  return useMutation(getUpsertUserMutationOptions(options));
+};
+
+/**
+ * Extracts Aadhaar fields using Chandra OCR (accurate mode) and saves to user profile.
+ * @summary Run OCR on an Aadhaar card image
+ */
+export const getOcrAadharUrl = () => {
+  return `/api/ocr/aadhar`;
+};
+
+export const ocrAadhar = async (
+  ocrAadharBody: OcrAadharBody,
+  options?: RequestInit,
+): Promise<UserProfile> => {
+  return customFetch<UserProfile>(getOcrAadharUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(ocrAadharBody),
+  });
+};
+
+export const getOcrAadharMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ocrAadhar>>,
+    TError,
+    { data: BodyType<OcrAadharBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof ocrAadhar>>,
+  TError,
+  { data: BodyType<OcrAadharBody> },
+  TContext
+> => {
+  const mutationKey = ["ocrAadhar"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof ocrAadhar>>,
+    { data: BodyType<OcrAadharBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return ocrAadhar(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type OcrAadharMutationResult = NonNullable<
+  Awaited<ReturnType<typeof ocrAadhar>>
+>;
+export type OcrAadharMutationBody = BodyType<OcrAadharBody>;
+export type OcrAadharMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run OCR on an Aadhaar card image
+ */
+export const useOcrAadhar = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ocrAadhar>>,
+    TError,
+    { data: BodyType<OcrAadharBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof ocrAadhar>>,
+  TError,
+  { data: BodyType<OcrAadharBody> },
+  TContext
+> => {
+  return useMutation(getOcrAadharMutationOptions(options));
+};

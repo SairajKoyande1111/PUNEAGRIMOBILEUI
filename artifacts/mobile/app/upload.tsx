@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ocrAadhar } from "@workspace/api-client-react";
 
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
@@ -54,15 +55,48 @@ const DOCUMENTS: DocItem[] = [
 export default function UploadScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { documents, setDocument, finishDocuments } = useAuth();
+  const { phone, documents, setDocument, finishDocuments } = useAuth();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [aadharStatus, setAadharStatus] =
+    useState<"idle" | "scanning" | "done" | "error">("idle");
+  const [aadharError, setAadharError] = useState<string | null>(null);
 
   const uploadedCount = useMemo(
     () => DOCUMENTS.filter((d) => documents[d.id]).length,
     [documents],
   );
-  const allDone = uploadedCount === DOCUMENTS.length;
+  const aadharUploaded = !!documents["aadhar"];
+  const canSubmit = aadharUploaded && aadharStatus !== "scanning";
+
+  const runAadharOcr = async (asset: ImagePicker.ImagePickerAsset) => {
+    if (!phone) {
+      Alert.alert("Error", "Missing phone number, please log in again.");
+      return;
+    }
+    if (!asset.base64) {
+      Alert.alert("Error", "Could not read image. Please try a different photo.");
+      return;
+    }
+    setAadharStatus("scanning");
+    setAadharError(null);
+    try {
+      await ocrAadhar({
+        phone,
+        imageBase64: asset.base64,
+        mimeType: asset.mimeType ?? "image/jpeg",
+      });
+      setAadharStatus("done");
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (e) {
+      setAadharStatus("error");
+      const msg =
+        e instanceof Error ? e.message : "Could not read Aadhaar card.";
+      setAadharError(msg);
+    }
+  };
 
   const pick = async (id: string) => {
     if (busyId) return;
@@ -79,12 +113,17 @@ export default function UploadScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: false,
-        quality: 0.85,
+        quality: 0.8,
+        base64: id === "aadhar",
       });
       if (!result.canceled && result.assets[0]) {
-        await setDocument(id, result.assets[0].uri);
+        const asset = result.assets[0];
+        await setDocument(id, asset.uri);
         if (Platform.OS !== "web") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+        if (id === "aadhar") {
+          await runAadharOcr(asset);
         }
       }
     } catch (e) {
@@ -95,12 +134,12 @@ export default function UploadScreen() {
   };
 
   const onContinue = async () => {
-    if (!allDone || submitting) return;
+    if (!canSubmit || submitting) return;
     setSubmitting(true);
     if (Platform.OS !== "web") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 200));
     await finishDocuments();
     setSubmitting(false);
   };
@@ -109,12 +148,19 @@ export default function UploadScreen() {
   const webBottomInset = Platform.OS === "web" ? 34 : 0;
   const progress = uploadedCount / DOCUMENTS.length;
 
+  const submitLabel = (() => {
+    if (submitting) return "Submitting...";
+    if (aadharStatus === "scanning") return "Reading Aadhaar...";
+    if (!aadharUploaded) return "Upload Aadhaar to continue";
+    return "Submit & Continue";
+  })();
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <ScrollView
         contentContainerStyle={{
           paddingTop: insets.top + 16 + webTopInset,
-          paddingBottom: insets.bottom + 120 + webBottomInset,
+          paddingBottom: insets.bottom + 140 + webBottomInset,
           paddingHorizontal: 20,
         }}
         showsVerticalScrollIndicator={false}
@@ -126,8 +172,8 @@ export default function UploadScreen() {
           Upload documents
         </Text>
         <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-          We need {DOCUMENTS.length} documents to complete your profile. Make
-          sure all text is clearly readable.
+          Aadhaar card is required — the rest are optional. Make sure all text
+          is clearly readable.
         </Text>
 
         <View
@@ -156,11 +202,30 @@ export default function UploadScreen() {
         {DOCUMENTS.map((doc) => {
           const uploaded = !!documents[doc.id];
           const isBusy = busyId === doc.id;
+          const isAadhar = doc.id === "aadhar";
+          let subText = uploaded
+            ? "Uploaded · Tap to replace"
+            : doc.description;
+          let subColor = uploaded ? colors.success : colors.mutedForeground;
+
+          if (isAadhar) {
+            if (aadharStatus === "scanning") {
+              subText = "Reading details with OCR...";
+              subColor = colors.primary;
+            } else if (aadharStatus === "done") {
+              subText = "Details extracted ✓ Tap to replace";
+              subColor = colors.success;
+            } else if (aadharStatus === "error") {
+              subText = aadharError || "OCR failed · Tap to retry";
+              subColor = colors.destructive;
+            }
+          }
+
           return (
             <Pressable
               key={doc.id}
               onPress={() => pick(doc.id)}
-              disabled={isBusy}
+              disabled={isBusy || (isAadhar && aadharStatus === "scanning")}
               style={({ pressed }) => [
                 styles.docCard,
                 {
@@ -182,7 +247,7 @@ export default function UploadScreen() {
                   },
                 ]}
               >
-                {isBusy ? (
+                {isBusy || (isAadhar && aadharStatus === "scanning") ? (
                   <ActivityIndicator
                     color={uploaded ? colors.primaryForeground : colors.primary}
                   />
@@ -198,21 +263,35 @@ export default function UploadScreen() {
               </View>
 
               <View style={styles.docTextWrap}>
+                <View style={styles.titleRow}>
+                  <Text
+                    style={[styles.docTitle, { color: colors.foreground }]}
+                  >
+                    {doc.title}
+                  </Text>
+                  {isAadhar ? (
+                    <View
+                      style={[
+                        styles.requiredBadge,
+                        { backgroundColor: colors.primary, borderRadius: 6 },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.requiredText,
+                          { color: colors.primaryForeground },
+                        ]}
+                      >
+                        REQUIRED
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
                 <Text
-                  style={[styles.docTitle, { color: colors.foreground }]}
+                  style={[styles.docSubtitle, { color: subColor }]}
+                  numberOfLines={2}
                 >
-                  {doc.title}
-                </Text>
-                <Text
-                  style={[
-                    styles.docSubtitle,
-                    {
-                      color: uploaded ? colors.success : colors.mutedForeground,
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {uploaded ? "Uploaded · Tap to replace" : doc.description}
+                  {subText}
                 </Text>
               </View>
 
@@ -238,11 +317,11 @@ export default function UploadScreen() {
       >
         <Pressable
           onPress={onContinue}
-          disabled={!allDone || submitting}
+          disabled={!canSubmit || submitting}
           style={({ pressed }) => [
             styles.button,
             {
-              backgroundColor: allDone ? colors.primary : colors.muted,
+              backgroundColor: canSubmit ? colors.primary : colors.muted,
               borderRadius: 14,
               opacity: pressed ? 0.9 : 1,
             },
@@ -252,15 +331,15 @@ export default function UploadScreen() {
             style={[
               styles.buttonText,
               {
-                color: allDone
+                color: canSubmit
                   ? colors.primaryForeground
                   : colors.mutedForeground,
               },
             ]}
           >
-            {submitting ? "Submitting..." : "Submit & Continue"}
+            {submitLabel}
           </Text>
-          {allDone && !submitting ? (
+          {canSubmit && !submitting ? (
             <Feather
               name="arrow-right"
               size={18}
@@ -321,10 +400,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   docTextWrap: { flex: 1 },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
   docTitle: {
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
-    marginBottom: 2,
+  },
+  requiredBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  requiredText: {
+    fontSize: 9,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: 0.6,
   },
   docSubtitle: {
     fontSize: 13,

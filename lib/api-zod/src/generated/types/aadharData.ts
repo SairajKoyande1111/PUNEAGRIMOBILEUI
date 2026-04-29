@@ -5,9 +5,6 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
 
 export interface AadharData {
   name?: string | null;
@@ -21,22 +18,3 @@ export interface AadharData {
   photoMimeType?: string | null;
   rawText?: string | null;
 }
-
-export interface UserProfile {
-  phone: string;
-  createdAt: string;
-  updatedAt: string;
-  aadhar?: AadharData | null;
-}
-
-export type UpsertUserBody = {
-  phone: string;
-};
-
-export type OcrAadharBody = {
-  phone: string;
-  /** Base64-encoded image (without data URI prefix) */
-  imageBase64: string;
-  /** MIME type of the uploaded image */
-  mimeType: string;
-};
