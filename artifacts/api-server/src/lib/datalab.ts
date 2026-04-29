@@ -1,54 +1,7 @@
-import sharp from "sharp";
 import { logger } from "./logger";
 
 const BASE_URL = process.env["DATALAB_BASE_URL"] || "https://www.datalab.to";
 const API_KEY = process.env["DATALAB_API_KEY"] || "";
-
-const AADHAR_SCHEMA = {
-  type: "object",
-  properties: {
-    name: {
-      type: "string",
-      description:
-        "Full name of the Aadhaar cardholder, in English, exactly as printed (e.g. 'Aniket Sanjay Rane'). The name appears in two places on an Indian e-Aadhaar: (1) at the top after 'To' / addressee block, and (2) on the photo side just above 'DOB' / 'Date of Birth'. Return the English-language version, not the Hindi one. Do NOT return the recipient salutation or 'To'.",
-    },
-    aadhaar_number: {
-      type: "string",
-      description:
-        "12-digit Aadhaar number, printed in the format 'XXXX XXXX XXXX' near the bottom of each half of the card. Return digits only, no spaces (e.g. '401593292039').",
-    },
-    date_of_birth: {
-      type: "string",
-      description:
-        "Date of birth printed as 'DOB:' or 'जन्म तिथि / Date of Birth :' on the photo side. Return in DD/MM/YYYY format (e.g. '23/03/2001').",
-    },
-    gender: {
-      type: "string",
-      description:
-        "Gender printed below the date of birth on the photo side. Return one of: Male, Female, Transgender.",
-    },
-    address: {
-      type: "string",
-      description:
-        "Full postal address from the addressee block at the top half of the card (after 'To' / 'पता'). Includes street/flat, building, locality, city, district, state, and PIN code. Return as a single line with parts separated by commas (e.g. 'Flat No 305, A Wing, B Floor, Hubtown Greenwood A CHS, Vartak Nagar, Thane West, Thane, Maharashtra - 400606'). Do NOT include the recipient name in the address.",
-    },
-    mobile_number: {
-      type: "string",
-      description:
-        "10-digit Indian mobile number if visible anywhere on the card. Otherwise return empty string.",
-    },
-  },
-  required: ["name", "aadhaar_number", "date_of_birth", "gender", "address"],
-};
-
-type ExtractFields = {
-  name?: string;
-  aadhaar_number?: string;
-  date_of_birth?: string;
-  gender?: string;
-  address?: string;
-  mobile_number?: string;
-};
 
 export type AadharOcrResult = {
   name: string | null;
@@ -57,10 +10,33 @@ export type AadharOcrResult = {
   gender: string | null;
   address: string | null;
   mobileNumber: string | null;
+  photoBase64: string | null;
+  photoMimeType: string | null;
   rawText: string | null;
 };
 
-async function submitDoc(
+type MarkerResult = {
+  status: string;
+  success?: boolean;
+  error?: string | null;
+  json?: { children?: Array<{ html?: string; children?: unknown }> } | null;
+  images?: Record<string, string> | null;
+  markdown?: string | null;
+};
+
+/**
+ * Submit a document to Datalab's Marker API.
+ *
+ * We use Marker (not Extract) because Marker:
+ *  - Splits the document into typed blocks (text, image, table, etc.)
+ *  - When use_llm=true, captions every image with a descriptive alt text
+ *    (e.g. "Portrait photo of Aniket Sanjay Rane", "Aadhaar logo")
+ *  - Returns each detected image as base64 in the `images` dict
+ *
+ * That lets us pick out the cardholder's face photo directly instead of
+ * guessing crop coordinates.
+ */
+async function submitMarker(
   buffer: Buffer,
   filename: string,
   mimeType: string,
@@ -68,11 +44,11 @@ async function submitDoc(
   const form = new FormData();
   const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
   form.append("file", blob, filename);
-  form.append("mode", "accurate");
-  form.append("output_format", "markdown");
-  form.append("page_schema", JSON.stringify(AADHAR_SCHEMA));
+  form.append("output_format", "json");
+  form.append("use_llm", "true");
+  form.append("paginate_output", "false");
 
-  const res = await fetch(`${BASE_URL}/api/v1/extract`, {
+  const res = await fetch(`${BASE_URL}/api/v1/marker`, {
     method: "POST",
     headers: { "X-API-Key": API_KEY },
     body: form,
@@ -95,7 +71,7 @@ async function submitDoc(
   if (!res.ok || !data.request_id) {
     logger.error(
       { status: res.status, datalab: data },
-      "Datalab submit failed",
+      "Datalab marker submit failed",
     );
     throw new Error(
       data.error ||
@@ -105,24 +81,14 @@ async function submitDoc(
   return data.request_id;
 }
 
-async function pollResult(requestId: string): Promise<{
-  status: string;
-  markdown?: string;
-  extraction_schema_json?: unknown;
-  error?: string;
-}> {
-  const maxAttempts = 40;
+async function pollMarker(requestId: string): Promise<MarkerResult> {
+  const maxAttempts = 60;
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((r) => setTimeout(r, 3000));
-    const res = await fetch(`${BASE_URL}/api/v1/extract/${requestId}`, {
+    const res = await fetch(`${BASE_URL}/api/v1/marker/${requestId}`, {
       headers: { "X-API-Key": API_KEY },
     });
-    const data = (await res.json()) as {
-      status: string;
-      markdown?: string;
-      extraction_schema_json?: unknown;
-      error?: string;
-    };
+    const data = (await res.json()) as MarkerResult;
     if (data.status === "complete") return data;
     if (data.status === "error" || data.error) {
       throw new Error(data.error || "OCR failed");
@@ -131,81 +97,166 @@ async function pollResult(requestId: string): Promise<{
   throw new Error("OCR timed out");
 }
 
-function pickFromText(text: string): ExtractFields {
-  const fields: ExtractFields = {};
-  const aadhaarMatch = text.match(/\b(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})\b/);
-  if (aadhaarMatch) {
-    fields.aadhaar_number = aadhaarMatch[1]! + aadhaarMatch[2]! + aadhaarMatch[3]!;
+/** Strip HTML tags / entities to get plain text. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|h1|h2|h3|li|div)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+/** Find the cardholder's portrait photo in Marker's image dict. */
+function pickPortraitImage(
+  html: string,
+  images: Record<string, string>,
+): { base64: string; mimeType: string } | null {
+  // Match <img alt="..." src="HASH_img.jpg"/> where alt mentions Portrait/face/photo of a person
+  const imgRe = /<img[^>]*alt="([^"]+)"[^>]*src="([^"]+)"/gi;
+  let match: RegExpExecArray | null;
+  const candidates: Array<{ alt: string; src: string }> = [];
+  while ((match = imgRe.exec(html)) !== null) {
+    candidates.push({ alt: match[1]!, src: match[2]! });
   }
-  const mobileMatch = text.match(/(?<![\d])([6-9]\d{9})(?![\d])/);
-  if (mobileMatch) fields.mobile_number = mobileMatch[1];
-  const dobMatch = text.match(
-    /\b(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b/,
+
+  // Prefer "portrait" or "photo of <name>" — these are the cardholder's face
+  const portrait = candidates.find((c) =>
+    /portrait|photo of [a-z]/i.test(c.alt),
   );
-  if (dobMatch) fields.date_of_birth = dobMatch[1];
-  const maleFemale = text.match(/\b(male|female)\b/i);
-  if (maleFemale) {
-    fields.gender =
-      maleFemale[1]!.charAt(0).toUpperCase() +
-      maleFemale[1]!.slice(1).toLowerCase();
+  if (portrait && images[portrait.src]) {
+    return { base64: images[portrait.src]!, mimeType: "image/jpeg" };
   }
-  return fields;
+  // Fallback: any image whose alt mentions a person/face
+  const faceish = candidates.find((c) =>
+    /\b(face|headshot|person|man|woman|boy|girl)\b/i.test(c.alt),
+  );
+  if (faceish && images[faceish.src]) {
+    return { base64: images[faceish.src]!, mimeType: "image/jpeg" };
+  }
+  return null;
 }
 
 /**
- * Crop the cardholder's face photo from the e-Aadhaar card image.
- *
- * The standard e-Aadhaar layout is portrait, with the addressee block on the
- * top half and the photo card on the bottom half. The passport-size photo
- * sits in the bottom-left of that lower half.
- *
- * Returns a JPEG base64 string of just the face region, or null if the crop
- * fails (e.g. unusual image). The caller can fall back to the full card image.
+ * Parse the structured fields out of Marker's HTML output.
+ * The e-Aadhaar layout is consistent: Marker emits one <p>...</p> per visual
+ * paragraph, with <br/> between visual lines. We rely on that structure.
  */
-export async function cropAadharFace(
-  buffer: Buffer,
-): Promise<{ base64: string; mimeType: string } | null> {
-  try {
-    const image = sharp(buffer, { failOn: "none" }).rotate(); // auto-orient via EXIF
-    const meta = await image.metadata();
-    const width = meta.width ?? 0;
-    const height = meta.height ?? 0;
-    if (width < 100 || height < 100) return null;
-
-    // Layout assumption: portrait e-Aadhaar.
-    // Bottom half = bottom 50% of the image.
-    // Photo region within the bottom half:
-    //   x: 4% to 32% of width  (≈ 28% wide)
-    //   y: 56% to 80% of height (≈ 24% tall, in the upper part of the bottom half)
-    let left = Math.round(width * 0.04);
-    let top = Math.round(height * 0.56);
-    let cropW = Math.round(width * 0.28);
-    let cropH = Math.round(height * 0.24);
-
-    // For landscape uploads (rare), fall back to a centered square in the
-    // upper-right region where the printed face usually sits.
-    if (width > height) {
-      left = Math.round(width * 0.04);
-      top = Math.round(height * 0.18);
-      cropW = Math.round(width * 0.18);
-      cropH = Math.round(height * 0.55);
-    }
-
-    // Clamp to image bounds.
-    cropW = Math.min(cropW, width - left);
-    cropH = Math.min(cropH, height - top);
-    if (cropW <= 0 || cropH <= 0) return null;
-
-    const out = await image
-      .extract({ left, top, width: cropW, height: cropH })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
-    return { base64: out.toString("base64"), mimeType: "image/jpeg" };
-  } catch (err) {
-    logger.warn({ err }, "cropAadharFace failed");
-    return null;
+function parseAadharFields(html: string): {
+  name: string | null;
+  address: string | null;
+  aadhaarNumber: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  mobileNumber: string | null;
+} {
+  // Pull every <p>...</p> block as a list of newline-separated lines.
+  const paragraphs: string[][] = [];
+  const pRe = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+  let pm: RegExpExecArray | null;
+  while ((pm = pRe.exec(html)) !== null) {
+    const lines = htmlToText(pm[1]!)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length) paragraphs.push(lines);
   }
+
+  const isLatin = (s: string) => /^[\x20-\x7E]+$/.test(s) && /[A-Za-z]/.test(s);
+  const isMobile = (s: string) => /^[6-9]\d{9}$/.test(s.replace(/\D/g, ""));
+
+  let name: string | null = null;
+  let address: string | null = null;
+  let dateOfBirth: string | null = null;
+  let gender: string | null = null;
+  let mobileNumber: string | null = null;
+
+  // 1) Addressee block: starts with "To", then Hindi name, then English name,
+  //    then C/O / building / locality / city / state-PIN / [mobile].
+  for (const lines of paragraphs) {
+    if (lines[0] && /^to$/i.test(lines[0])) {
+      // Find the first Latin-script line — that's the English name.
+      const englishLines: string[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        if (isLatin(lines[i]!)) englishLines.push(lines[i]!);
+      }
+      if (englishLines.length >= 2) {
+        name ??= englishLines[0]!.replace(/^[Tt]o:?\s*/, "").trim();
+        // Drop the last line if it's a bare 10-digit mobile.
+        const tail = englishLines[englishLines.length - 1]!;
+        if (isMobile(tail)) {
+          mobileNumber ??= tail.replace(/\D/g, "");
+          englishLines.pop();
+        }
+        // Address = everything after the name line.
+        const addrParts = englishLines.slice(1).filter(Boolean);
+        if (addrParts.length) {
+          address ??= addrParts.join(", ").replace(/\s*,\s*/g, ", ").trim();
+        }
+      }
+      break;
+    }
+  }
+
+  // 2) Photo-side block: "<Hindi name><br/>English name<br/>DOB: ...<br/>MALE"
+  for (const lines of paragraphs) {
+    const dobLine = lines.find((l) => /\bDOB\b|जन्म\s*तिथि/i.test(l));
+    if (!dobLine) continue;
+    const dobMatch = dobLine.match(/(\d{2}[\/-]\d{2}[\/-]\d{4})/);
+    if (dobMatch) dateOfBirth ??= dobMatch[1]!.replace(/-/g, "/");
+    const genderLine = lines.find((l) =>
+      /\b(MALE|FEMALE|Male|Female|Transgender)\b/.test(l),
+    );
+    if (genderLine) {
+      const g = genderLine.match(
+        /\b(MALE|FEMALE|Male|Female|Transgender)\b/,
+      )?.[1];
+      if (g) {
+        gender ??=
+          g.charAt(0).toUpperCase() + g.slice(1).toLowerCase();
+      }
+    }
+    // English name fallback if addressee block didn't have one
+    if (!name) {
+      const englishName = lines.find(
+        (l) =>
+          isLatin(l) &&
+          !/DOB|Date of Birth|MALE|FEMALE/i.test(l) &&
+          l.split(/\s+/).length >= 2 &&
+          l.split(/\s+/).length <= 6,
+      );
+      if (englishName) name = englishName;
+    }
+    break;
+  }
+
+  // 3) Aadhaar number — "<b>4015 9329 2039</b>" or first 4-4-4 sequence.
+  let aadhaarNumber: string | null = null;
+  const aadMatch = html.match(/<b>\s*(\d{4})\s+(\d{4})\s+(\d{4})\s*<\/b>/);
+  if (aadMatch) {
+    aadhaarNumber = aadMatch[1]! + aadMatch[2]! + aadMatch[3]!;
+  } else {
+    const fallback = htmlToText(html).match(
+      /\b(\d{4})\s+(\d{4})\s+(\d{4})\b/,
+    );
+    if (fallback)
+      aadhaarNumber = fallback[1]! + fallback[2]! + fallback[3]!;
+  }
+
+  // 4) Mobile fallback if not in addressee block — first 10-digit Indian
+  //    number anywhere in the text.
+  if (!mobileNumber) {
+    const mob = htmlToText(html).match(/(?<!\d)([6-9]\d{9})(?!\d)/);
+    if (mob) mobileNumber = mob[1]!;
+  }
+
+  return { name, address, aadhaarNumber, dateOfBirth, gender, mobileNumber };
 }
 
 export async function extractAadhar(
@@ -221,49 +272,46 @@ export async function extractAadhar(
     : mimeType.includes("webp")
       ? "webp"
       : "jpg";
-  const requestId = await submitDoc(buffer, `aadhar.${ext}`, mimeType);
-  logger.info({ requestId }, "Submitted Aadhaar to OCR");
 
-  const result = await pollResult(requestId);
-  const rawText =
-    result.markdown ?? JSON.stringify(result.extraction_schema_json ?? "");
+  const requestId = await submitMarker(buffer, `aadhar.${ext}`, mimeType);
+  logger.info({ requestId }, "Submitted Aadhaar to Marker");
 
-  let fields: ExtractFields = {};
-  if (result.extraction_schema_json) {
-    const raw = result.extraction_schema_json;
-    if (Array.isArray(raw)) {
-      for (const page of raw) {
-        if (page && typeof page === "object") {
-          fields = { ...fields, ...(page as ExtractFields) };
-        }
-      }
-    } else if (raw && typeof raw === "object") {
-      fields = { ...fields, ...(raw as ExtractFields) };
-    }
+  const result = await pollMarker(requestId);
+
+  // Concatenate the HTML of every block — gives us one big string to scan.
+  const blocks = result.json?.children ?? [];
+  const html = blocks.map((b) => b.html ?? "").join("\n");
+  const images = result.images ?? {};
+
+  const fields = parseAadharFields(html);
+  const photo = pickPortraitImage(html, images);
+
+  if (!photo) {
+    logger.warn(
+      {
+        imageCount: Object.keys(images).length,
+        imageAlts: (html.match(/<img[^>]*alt="([^"]+)"/gi) ?? []).slice(0, 10),
+      },
+      "Could not identify portrait photo from Marker output",
+    );
   }
 
-  const fromText = pickFromText(rawText);
-  fields = {
-    aadhaar_number: fields.aadhaar_number ?? fromText.aadhaar_number,
-    name: fields.name,
-    address: fields.address,
-    mobile_number: fields.mobile_number ?? fromText.mobile_number,
-    date_of_birth: fields.date_of_birth ?? fromText.date_of_birth,
-    gender: fields.gender ?? fromText.gender,
-  };
+  const cleanedAadhar =
+    fields.aadhaarNumber?.replace(/\D/g, "").slice(0, 12) || null;
+  const cleanedMobile =
+    fields.mobileNumber?.replace(/\D/g, "").slice(0, 10) || null;
 
-  const cleanedAadhar = fields.aadhaar_number?.replace(/\D/g, "") || null;
-  const cleanedMobile = fields.mobile_number?.replace(/\D/g, "") || null;
+  const rawText = htmlToText(html);
 
   return {
     name: fields.name?.trim() || null,
-    aadhaarNumber:
-      cleanedAadhar && cleanedAadhar.length === 12 ? cleanedAadhar : cleanedAadhar,
-    dateOfBirth: fields.date_of_birth?.trim() || null,
-    gender: fields.gender?.trim() || null,
-    address: fields.address?.trim() || null,
-    mobileNumber:
-      cleanedMobile && cleanedMobile.length === 10 ? cleanedMobile : cleanedMobile,
+    aadhaarNumber: cleanedAadhar,
+    dateOfBirth: fields.dateOfBirth || null,
+    gender: fields.gender || null,
+    address: fields.address || null,
+    mobileNumber: cleanedMobile,
+    photoBase64: photo?.base64 ?? null,
+    photoMimeType: photo?.mimeType ?? null,
     rawText: rawText.length > 4000 ? rawText.slice(0, 4000) : rawText,
   };
 }

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { cropAadharFace, extractAadhar } from "../lib/datalab";
+import { extractAadhar } from "../lib/datalab";
 import { setAadharOnUser } from "../lib/mongo";
 
 const router: IRouter = Router();
@@ -27,16 +27,14 @@ router.post("/ocr/aadhar", async (req, res) => {
 
     req.log.info({ phone, size: buffer.length }, "Running Aadhaar OCR");
 
-    // Run OCR + face crop in parallel — they don't depend on each other.
-    const [ocr, face] = await Promise.all([
-      extractAadhar(buffer, mimeType),
-      cropAadharFace(buffer),
-    ]);
+    const ocr = await extractAadhar(buffer, mimeType);
 
+    // Marker should detect the cardholder's portrait. If it doesn't, fall
+    // back to the full card image so the profile screen still has *something*.
     const aadhar = {
       ...ocr,
-      photoBase64: face?.base64 ?? cleanBase64,
-      photoMimeType: face?.mimeType ?? mimeType,
+      photoBase64: ocr.photoBase64 ?? cleanBase64,
+      photoMimeType: ocr.photoMimeType ?? mimeType,
     };
 
     const doc = await setAadharOnUser(phone, aadhar);
