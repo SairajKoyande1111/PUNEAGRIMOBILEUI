@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AadharData } from "./aadharData";
+import type { PassbookData } from "./passbookData";
 
 export interface UserProfile {
   phone: string;
   createdAt: string;
   updatedAt: string;
   aadhar?: AadharData | null;
+  passbook?: PassbookData | null;
 }

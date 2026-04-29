@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ocrAadhar } from "@workspace/api-client-react";
+import { ocrAadhar, ocrPassbook } from "@workspace/api-client-react";
 
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
@@ -58,16 +58,20 @@ export default function UploadScreen() {
   const { phone, documents, setDocument, finishDocuments } = useAuth();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [aadharStatus, setAadharStatus] =
-    useState<"idle" | "scanning" | "done" | "error">("idle");
+  type OcrStatus = "idle" | "scanning" | "done" | "error";
+  const [aadharStatus, setAadharStatus] = useState<OcrStatus>("idle");
   const [aadharError, setAadharError] = useState<string | null>(null);
+  const [passbookStatus, setPassbookStatus] = useState<OcrStatus>("idle");
+  const [passbookError, setPassbookError] = useState<string | null>(null);
 
   const uploadedCount = useMemo(
     () => DOCUMENTS.filter((d) => documents[d.id]).length,
     [documents],
   );
   const aadharUploaded = !!documents["aadhar"];
-  const canSubmit = aadharUploaded && aadharStatus !== "scanning";
+  const anyScanning =
+    aadharStatus === "scanning" || passbookStatus === "scanning";
+  const canSubmit = aadharUploaded && !anyScanning;
 
   const runAadharOcr = async (asset: ImagePicker.ImagePickerAsset) => {
     if (!phone) {
@@ -98,6 +102,35 @@ export default function UploadScreen() {
     }
   };
 
+  const runPassbookOcr = async (asset: ImagePicker.ImagePickerAsset) => {
+    if (!phone) {
+      Alert.alert("Error", "Missing phone number, please log in again.");
+      return;
+    }
+    if (!asset.base64) {
+      Alert.alert("Error", "Could not read image. Please try a different photo.");
+      return;
+    }
+    setPassbookStatus("scanning");
+    setPassbookError(null);
+    try {
+      await ocrPassbook({
+        phone,
+        imageBase64: asset.base64,
+        mimeType: asset.mimeType ?? "image/jpeg",
+      });
+      setPassbookStatus("done");
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (e) {
+      setPassbookStatus("error");
+      const msg =
+        e instanceof Error ? e.message : "Could not read passbook.";
+      setPassbookError(msg);
+    }
+  };
+
   const pick = async (id: string) => {
     if (busyId) return;
     setBusyId(id);
@@ -110,11 +143,12 @@ export default function UploadScreen() {
         );
         return;
       }
+      const needsBase64 = id === "aadhar" || id === "bank_passbook";
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: false,
         quality: 0.8,
-        base64: id === "aadhar",
+        base64: needsBase64,
       });
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
@@ -124,6 +158,8 @@ export default function UploadScreen() {
         }
         if (id === "aadhar") {
           await runAadharOcr(asset);
+        } else if (id === "bank_passbook") {
+          await runPassbookOcr(asset);
         }
       }
     } catch (e) {
@@ -151,6 +187,7 @@ export default function UploadScreen() {
   const submitLabel = (() => {
     if (submitting) return "Submitting...";
     if (aadharStatus === "scanning") return "Reading Aadhaar...";
+    if (passbookStatus === "scanning") return "Reading passbook...";
     if (!aadharUploaded) return "Upload Aadhaar to continue";
     return "Submit & Continue";
   })();
@@ -203,6 +240,7 @@ export default function UploadScreen() {
           const uploaded = !!documents[doc.id];
           const isBusy = busyId === doc.id;
           const isAadhar = doc.id === "aadhar";
+          const isPassbook = doc.id === "bank_passbook";
           let subText = uploaded
             ? "Uploaded · Tap to replace"
             : doc.description;
@@ -219,13 +257,28 @@ export default function UploadScreen() {
               subText = aadharError || "OCR failed · Tap to retry";
               subColor = colors.destructive;
             }
+          } else if (isPassbook) {
+            if (passbookStatus === "scanning") {
+              subText = "Reading bank details with OCR...";
+              subColor = colors.primary;
+            } else if (passbookStatus === "done") {
+              subText = "Bank details extracted ✓ Tap to replace";
+              subColor = colors.success;
+            } else if (passbookStatus === "error") {
+              subText = passbookError || "OCR failed · Tap to retry";
+              subColor = colors.destructive;
+            }
           }
+
+          const cardScanning =
+            (isAadhar && aadharStatus === "scanning") ||
+            (isPassbook && passbookStatus === "scanning");
 
           return (
             <Pressable
               key={doc.id}
               onPress={() => pick(doc.id)}
-              disabled={isBusy || (isAadhar && aadharStatus === "scanning")}
+              disabled={isBusy || cardScanning}
               style={({ pressed }) => [
                 styles.docCard,
                 {
@@ -247,7 +300,7 @@ export default function UploadScreen() {
                   },
                 ]}
               >
-                {isBusy || (isAadhar && aadharStatus === "scanning") ? (
+                {isBusy || cardScanning ? (
                   <ActivityIndicator
                     color={uploaded ? colors.primaryForeground : colors.primary}
                   />

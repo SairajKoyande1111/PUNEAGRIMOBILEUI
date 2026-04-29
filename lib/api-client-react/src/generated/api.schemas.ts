@@ -22,11 +22,27 @@ export interface AadharData {
   rawText?: string | null;
 }
 
+export interface PassbookData {
+  /** Full bank name derived from IFSC or branch text (e.g. "State Bank of India"). */
+  bankName?: string | null;
+  accountHolderName?: string | null;
+  cifNumber?: string | null;
+  accountNumber?: string | null;
+  accountType?: string | null;
+  ifsc?: string | null;
+  micr?: string | null;
+  branchName?: string | null;
+  branchCode?: string | null;
+  accountOpeningDate?: string | null;
+  rawText?: string | null;
+}
+
 export interface UserProfile {
   phone: string;
   createdAt: string;
   updatedAt: string;
   aadhar?: AadharData | null;
+  passbook?: PassbookData | null;
 }
 
 export type UpsertUserBody = {
@@ -34,6 +50,14 @@ export type UpsertUserBody = {
 };
 
 export type OcrAadharBody = {
+  phone: string;
+  /** Base64-encoded image (without data URI prefix) */
+  imageBase64: string;
+  /** MIME type of the uploaded image */
+  mimeType: string;
+};
+
+export type OcrPassbookBody = {
   phone: string;
   /** Base64-encoded image (without data URI prefix) */
   imageBase64: string;

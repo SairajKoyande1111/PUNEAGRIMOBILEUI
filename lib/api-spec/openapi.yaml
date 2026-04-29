@@ -97,6 +97,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserProfile"
+  /ocr/passbook:
+    post:
+      operationId: ocrPassbook
+      tags: [ocr]
+      summary: Run OCR on a bank passbook image
+      description: Extracts CIF number, account number, account type, IFSC code, branch and bank name from the passbook front page and saves them on the user profile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                imageBase64:
+                  type: string
+                  description: Base64-encoded image (without data URI prefix)
+                mimeType:
+                  type: string
+                  description: MIME type of the uploaded image
+              required: [phone, imageBase64, mimeType]
+      responses:
+        "200":
+          description: Extracted passbook data and updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
 components:
   schemas:
     HealthStatus:
@@ -137,6 +166,43 @@ components:
         rawText:
           type: string
           nullable: true
+    PassbookData:
+      type: object
+      properties:
+        bankName:
+          type: string
+          nullable: true
+          description: Full bank name derived from IFSC or branch text (e.g. "State Bank of India").
+        accountHolderName:
+          type: string
+          nullable: true
+        cifNumber:
+          type: string
+          nullable: true
+        accountNumber:
+          type: string
+          nullable: true
+        accountType:
+          type: string
+          nullable: true
+        ifsc:
+          type: string
+          nullable: true
+        micr:
+          type: string
+          nullable: true
+        branchName:
+          type: string
+          nullable: true
+        branchCode:
+          type: string
+          nullable: true
+        accountOpeningDate:
+          type: string
+          nullable: true
+        rawText:
+          type: string
+          nullable: true
     UserProfile:
       type: object
       properties:
@@ -148,6 +214,9 @@ components:
           type: string
         aadhar:
           $ref: "#/components/schemas/AadharData"
+          nullable: true
+        passbook:
+          $ref: "#/components/schemas/PassbookData"
           nullable: true
       required:
         - phone

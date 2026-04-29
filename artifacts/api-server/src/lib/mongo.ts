@@ -21,6 +21,7 @@ export type UserDoc = {
   createdAt: string;
   updatedAt: string;
   aadhar?: AadharDoc | null;
+  passbook?: PassbookDoc | null;
 };
 
 export type AadharDoc = {
@@ -32,6 +33,20 @@ export type AadharDoc = {
   mobileNumber?: string | null;
   photoBase64?: string | null;
   photoMimeType?: string | null;
+  rawText?: string | null;
+};
+
+export type PassbookDoc = {
+  bankName?: string | null;
+  accountHolderName?: string | null;
+  cifNumber?: string | null;
+  accountNumber?: string | null;
+  accountType?: string | null;
+  ifsc?: string | null;
+  micr?: string | null;
+  branchName?: string | null;
+  branchCode?: string | null;
+  accountOpeningDate?: string | null;
   rawText?: string | null;
 };
 
@@ -69,6 +84,25 @@ export async function setAadharOnUser(
     {
       $setOnInsert: { phone, createdAt: now },
       $set: { aadhar, updatedAt: now },
+    },
+    { upsert: true },
+  );
+  const doc = await users.findOne({ phone });
+  return doc as UserDoc;
+}
+
+export async function setPassbookOnUser(
+  phone: string,
+  passbook: PassbookDoc,
+): Promise<UserDoc> {
+  const db = await getDb();
+  const users = db.collection<UserDoc>("users");
+  const now = new Date().toISOString();
+  await users.updateOne(
+    { phone },
+    {
+      $setOnInsert: { phone, createdAt: now },
+      $set: { passbook, updatedAt: now },
     },
     { upsert: true },
   );

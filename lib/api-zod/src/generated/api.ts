@@ -42,6 +42,26 @@ export const GetUserByPhoneResponse = zod.object({
       rawText: zod.string().nullish(),
     })
     .nullish(),
+  passbook: zod
+    .object({
+      bankName: zod
+        .string()
+        .nullish()
+        .describe(
+          'Full bank name derived from IFSC or branch text (e.g. \"State Bank of India\").',
+        ),
+      accountHolderName: zod.string().nullish(),
+      cifNumber: zod.string().nullish(),
+      accountNumber: zod.string().nullish(),
+      accountType: zod.string().nullish(),
+      ifsc: zod.string().nullish(),
+      micr: zod.string().nullish(),
+      branchName: zod.string().nullish(),
+      branchCode: zod.string().nullish(),
+      accountOpeningDate: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
 });
 
 /**
@@ -68,6 +88,26 @@ export const UpsertUserResponse = zod.object({
         .nullish()
         .describe("The original Aadhaar card image (base64-encoded)"),
       photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+  passbook: zod
+    .object({
+      bankName: zod
+        .string()
+        .nullish()
+        .describe(
+          'Full bank name derived from IFSC or branch text (e.g. \"State Bank of India\").',
+        ),
+      accountHolderName: zod.string().nullish(),
+      cifNumber: zod.string().nullish(),
+      accountNumber: zod.string().nullish(),
+      accountType: zod.string().nullish(),
+      ifsc: zod.string().nullish(),
+      micr: zod.string().nullish(),
+      branchName: zod.string().nullish(),
+      branchCode: zod.string().nullish(),
+      accountOpeningDate: zod.string().nullish(),
       rawText: zod.string().nullish(),
     })
     .nullish(),
@@ -102,6 +142,80 @@ export const OcrAadharResponse = zod.object({
         .nullish()
         .describe("The original Aadhaar card image (base64-encoded)"),
       photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+  passbook: zod
+    .object({
+      bankName: zod
+        .string()
+        .nullish()
+        .describe(
+          'Full bank name derived from IFSC or branch text (e.g. \"State Bank of India\").',
+        ),
+      accountHolderName: zod.string().nullish(),
+      cifNumber: zod.string().nullish(),
+      accountNumber: zod.string().nullish(),
+      accountType: zod.string().nullish(),
+      ifsc: zod.string().nullish(),
+      micr: zod.string().nullish(),
+      branchName: zod.string().nullish(),
+      branchCode: zod.string().nullish(),
+      accountOpeningDate: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+});
+
+/**
+ * Extracts CIF number, account number, account type, IFSC code, branch and bank name from the passbook front page and saves them on the user profile.
+ * @summary Run OCR on a bank passbook image
+ */
+export const OcrPassbookBody = zod.object({
+  phone: zod.string(),
+  imageBase64: zod
+    .string()
+    .describe("Base64-encoded image (without data URI prefix)"),
+  mimeType: zod.string().describe("MIME type of the uploaded image"),
+});
+
+export const OcrPassbookResponse = zod.object({
+  phone: zod.string(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  aadhar: zod
+    .object({
+      name: zod.string().nullish(),
+      aadhaarNumber: zod.string().nullish(),
+      dateOfBirth: zod.string().nullish(),
+      gender: zod.string().nullish(),
+      address: zod.string().nullish(),
+      mobileNumber: zod.string().nullish(),
+      photoBase64: zod
+        .string()
+        .nullish()
+        .describe("The original Aadhaar card image (base64-encoded)"),
+      photoMimeType: zod.string().nullish(),
+      rawText: zod.string().nullish(),
+    })
+    .nullish(),
+  passbook: zod
+    .object({
+      bankName: zod
+        .string()
+        .nullish()
+        .describe(
+          'Full bank name derived from IFSC or branch text (e.g. \"State Bank of India\").',
+        ),
+      accountHolderName: zod.string().nullish(),
+      cifNumber: zod.string().nullish(),
+      accountNumber: zod.string().nullish(),
+      accountType: zod.string().nullish(),
+      ifsc: zod.string().nullish(),
+      micr: zod.string().nullish(),
+      branchName: zod.string().nullish(),
+      branchCode: zod.string().nullish(),
+      accountOpeningDate: zod.string().nullish(),
       rawText: zod.string().nullish(),
     })
     .nullish(),

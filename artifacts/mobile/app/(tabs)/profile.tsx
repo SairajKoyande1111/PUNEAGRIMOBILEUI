@@ -55,10 +55,19 @@ export default function ProfileScreen() {
   );
 
   const aadhar = data?.aadhar ?? null;
+  const passbook = data?.passbook ?? null;
   const photoUri =
     aadhar?.photoBase64 && aadhar.photoMimeType
       ? `data:${aadhar.photoMimeType};base64,${aadhar.photoBase64}`
       : null;
+
+  const maskedAccount = (() => {
+    const acc = passbook?.accountNumber;
+    if (!acc) return null;
+    const d = acc.replace(/\D/g, "");
+    if (d.length <= 4) return acc;
+    return `${"X".repeat(d.length - 4)}${d.slice(-4)}`;
+  })();
 
   const onLogout = () => {
     const doLogout = async () => {
@@ -241,6 +250,83 @@ export default function ProfileScreen() {
             >
               Upload your Aadhaar card on the documents screen to auto-fill
               your profile.
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Bank details */}
+        {passbook ? (
+          <View
+            style={[
+              styles.section,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.sectionHeader}>
+              <Feather name="book" size={16} color={colors.primary} />
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+                Bank details
+              </Text>
+            </View>
+            <Field
+              label="Bank name"
+              value={passbook.bankName}
+              colors={colors}
+            />
+            <Field
+              label="Account holder"
+              value={passbook.accountHolderName}
+              colors={colors}
+            />
+            <Field
+              label="CIF number"
+              value={passbook.cifNumber}
+              colors={colors}
+              mono
+            />
+            <Field
+              label="Account number"
+              value={maskedAccount}
+              colors={colors}
+              mono
+            />
+            <Field
+              label="A/c type"
+              value={passbook.accountType}
+              colors={colors}
+            />
+            <Field
+              label="IFSC"
+              value={passbook.ifsc}
+              colors={colors}
+              mono
+            />
+            <Field
+              label="Branch"
+              value={
+                passbook.branchName && passbook.branchCode
+                  ? `${passbook.branchName} (${passbook.branchCode})`
+                  : passbook.branchName || passbook.branchCode
+              }
+              colors={colors}
+            />
+          </View>
+        ) : !isLoading ? (
+          <View
+            style={[
+              styles.emptyBox,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Feather name="book" size={22} color={colors.mutedForeground} />
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+              No bank passbook on file
+            </Text>
+            <Text
+              style={[styles.emptyBody, { color: colors.mutedForeground }]}
+            >
+              Upload your bank passbook on the documents screen to auto-fill
+              your bank details.
             </Text>
           </View>
         ) : null}

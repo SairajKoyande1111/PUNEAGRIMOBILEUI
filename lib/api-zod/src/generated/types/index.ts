@@ -9,5 +9,7 @@
 export * from "./aadharData";
 export * from "./healthStatus";
 export * from "./ocrAadharBody";
+export * from "./ocrPassbookBody";
+export * from "./passbookData";
 export * from "./upsertUserBody";
 export * from "./userProfile";

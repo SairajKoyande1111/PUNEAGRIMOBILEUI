@@ -19,6 +19,7 @@ import type {
 import type {
   HealthStatus,
   OcrAadharBody,
+  OcrPassbookBody,
   UpsertUserBody,
   UserProfile,
 } from "./api.schemas";
@@ -366,4 +367,91 @@ export const useOcrAadhar = <
   TContext
 > => {
   return useMutation(getOcrAadharMutationOptions(options));
+};
+
+/**
+ * Extracts CIF number, account number, account type, IFSC code, branch and bank name from the passbook front page and saves them on the user profile.
+ * @summary Run OCR on a bank passbook image
+ */
+export const getOcrPassbookUrl = () => {
+  return `/api/ocr/passbook`;
+};
+
+export const ocrPassbook = async (
+  ocrPassbookBody: OcrPassbookBody,
+  options?: RequestInit,
+): Promise<UserProfile> => {
+  return customFetch<UserProfile>(getOcrPassbookUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(ocrPassbookBody),
+  });
+};
+
+export const getOcrPassbookMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ocrPassbook>>,
+    TError,
+    { data: BodyType<OcrPassbookBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof ocrPassbook>>,
+  TError,
+  { data: BodyType<OcrPassbookBody> },
+  TContext
+> => {
+  const mutationKey = ["ocrPassbook"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof ocrPassbook>>,
+    { data: BodyType<OcrPassbookBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return ocrPassbook(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type OcrPassbookMutationResult = NonNullable<
+  Awaited<ReturnType<typeof ocrPassbook>>
+>;
+export type OcrPassbookMutationBody = BodyType<OcrPassbookBody>;
+export type OcrPassbookMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run OCR on a bank passbook image
+ */
+export const useOcrPassbook = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ocrPassbook>>,
+    TError,
+    { data: BodyType<OcrPassbookBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof ocrPassbook>>,
+  TError,
+  { data: BodyType<OcrPassbookBody> },
+  TContext
+> => {
+  return useMutation(getOcrPassbookMutationOptions(options));
 };

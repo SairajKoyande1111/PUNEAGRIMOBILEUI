@@ -40,12 +40,19 @@ router.get("/users/:phone", async (req, res) => {
   }
 });
 
-function serialize(doc: { phone: string; createdAt: string; updatedAt: string; aadhar?: unknown }) {
+function serialize(doc: {
+  phone: string;
+  createdAt: string;
+  updatedAt: string;
+  aadhar?: unknown;
+  passbook?: unknown;
+}) {
   return {
     phone: doc.phone,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
     aadhar: doc.aadhar ?? null,
+    passbook: doc.passbook ?? null,
   };
 }
 

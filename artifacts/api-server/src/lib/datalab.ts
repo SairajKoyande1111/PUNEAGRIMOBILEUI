@@ -259,6 +259,26 @@ function parseAadharFields(html: string): {
   return { name, address, aadhaarNumber, dateOfBirth, gender, mobileNumber };
 }
 
+function fileExtFor(mimeType: string): string {
+  return mimeType.includes("png")
+    ? "png"
+    : mimeType.includes("webp")
+      ? "webp"
+      : "jpg";
+}
+
+async function runMarker(
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  label: string,
+): Promise<MarkerResult> {
+  if (!API_KEY) throw new Error("DATALAB_API_KEY is not configured");
+  const requestId = await submitMarker(buffer, filename, mimeType);
+  logger.info({ requestId, label }, "Submitted to Marker");
+  return pollMarker(requestId);
+}
+
 export async function extractAadhar(
   buffer: Buffer,
   mimeType: string,
@@ -267,12 +287,7 @@ export async function extractAadhar(
     throw new Error("DATALAB_API_KEY is not configured");
   }
 
-  const ext = mimeType.includes("png")
-    ? "png"
-    : mimeType.includes("webp")
-      ? "webp"
-      : "jpg";
-
+  const ext = fileExtFor(mimeType);
   const requestId = await submitMarker(buffer, `aadhar.${ext}`, mimeType);
   logger.info({ requestId }, "Submitted Aadhaar to Marker");
 
@@ -313,5 +328,186 @@ export async function extractAadhar(
     photoBase64: photo?.base64 ?? null,
     photoMimeType: photo?.mimeType ?? null,
     rawText: rawText.length > 4000 ? rawText.slice(0, 4000) : rawText,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Bank passbook
+// ---------------------------------------------------------------------------
+
+export type PassbookOcrResult = {
+  bankName: string | null;
+  accountHolderName: string | null;
+  cifNumber: string | null;
+  accountNumber: string | null;
+  accountType: string | null;
+  ifsc: string | null;
+  micr: string | null;
+  branchName: string | null;
+  branchCode: string | null;
+  accountOpeningDate: string | null;
+  rawText: string | null;
+};
+
+/**
+ * Map an IFSC code prefix (first 4 letters) to the issuing bank's full name.
+ * Covers all major Indian commercial banks. If the prefix is unknown we fall
+ * back to whatever text the OCR found near "Bank" on the page.
+ */
+const IFSC_BANK_MAP: Record<string, string> = {
+  SBIN: "State Bank of India",
+  HDFC: "HDFC Bank",
+  ICIC: "ICICI Bank",
+  AXIS: "Axis Bank",
+  UTIB: "Axis Bank",
+  PUNB: "Punjab National Bank",
+  ORBC: "Punjab National Bank",
+  UBIN: "Union Bank of India",
+  BARB: "Bank of Baroda",
+  CNRB: "Canara Bank",
+  SYNB: "Canara Bank",
+  IBKL: "IDBI Bank",
+  IDFB: "IDFC FIRST Bank",
+  KKBK: "Kotak Mahindra Bank",
+  YESB: "Yes Bank",
+  INDB: "IndusInd Bank",
+  BKID: "Bank of India",
+  IOBA: "Indian Overseas Bank",
+  IDIB: "Indian Bank",
+  ALLA: "Indian Bank",
+  CBIN: "Central Bank of India",
+  MAHB: "Bank of Maharashtra",
+  PSIB: "Punjab & Sind Bank",
+  UCBA: "UCO Bank",
+  RATN: "RBL Bank",
+  FDRL: "Federal Bank",
+  KARB: "Karnataka Bank",
+  TMBL: "Tamilnad Mercantile Bank",
+  CIUB: "City Union Bank",
+  SIBL: "South Indian Bank",
+  DBSS: "DBS Bank India",
+  CITI: "Citibank",
+  HSBC: "HSBC",
+  SCBL: "Standard Chartered Bank",
+  DEUT: "Deutsche Bank",
+  AUBL: "AU Small Finance Bank",
+  ESFB: "Equitas Small Finance Bank",
+  UJVN: "Ujjivan Small Finance Bank",
+  BANDHAN: "Bandhan Bank",
+  BDBL: "Bandhan Bank",
+};
+
+function bankNameFromIfsc(ifsc: string | null): string | null {
+  if (!ifsc || ifsc.length < 4) return null;
+  return IFSC_BANK_MAP[ifsc.slice(0, 4).toUpperCase()] ?? null;
+}
+
+/** Pick a single value out of "<label>: <value>" lines. Tolerates extra
+ *  trailing punctuation in the label (e.g. "Account No.:"). */
+function findField(text: string, labels: string[]): string | null {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(
+      `(?:^|\\n)\\s*${escaped}[\\.\\s]*[:\\-]\\s*([^\\n]+)`,
+      "i",
+    );
+    const m = text.match(re);
+    if (m && m[1]) {
+      const value = m[1].trim().replace(/\s{2,}/g, " ");
+      if (value && !/^[:\-]+$/.test(value)) return value;
+    }
+  }
+  return null;
+}
+
+function parsePassbookFields(html: string): {
+  text: string;
+  data: Omit<PassbookOcrResult, "rawText">;
+} {
+  const text = htmlToText(html);
+
+  // IFSC: 4 letters + 0 + 6 alphanumerics — Indian standard.
+  const ifscMatch = text.match(/\b([A-Z]{4}0[A-Z0-9]{6})\b/);
+  const ifsc = ifscMatch ? ifscMatch[1]! : findField(text, ["IFSC"]);
+  const cleanedIfsc = ifsc ? ifsc.replace(/\s+/g, "").toUpperCase() : null;
+
+  // MICR: 9 digits.
+  const micrField = findField(text, ["MICR"]);
+  const micrMatch = (micrField ?? text).match(/\b(\d{9})\b/);
+  const micr = micrMatch ? micrMatch[1]! : null;
+
+  // CIF Number — usually 9-12 digits.
+  const cifRaw = findField(text, ["CIF Number", "CIF No", "CIF"]);
+  const cif = cifRaw?.match(/\d[\d\s]*\d/)?.[0]?.replace(/\s+/g, "") ?? null;
+
+  // Account Number — varies by bank, 8-18 digits.
+  const accRaw = findField(text, ["Account No", "A/c No", "Account Number"]);
+  const accountNumber =
+    accRaw?.match(/\d[\d\s]*\d/)?.[0]?.replace(/\s+/g, "") ?? null;
+
+  // A/c Type
+  const accountType = findField(text, [
+    "A/c Type",
+    "Account Type",
+    "Type of Account",
+  ]);
+
+  // Account Holder Name (strip honorifics like "Mr.", "Mrs.")
+  const nameRaw = findField(text, ["Name"]);
+  const accountHolderName = nameRaw
+    ? nameRaw.replace(/^(Mr|Mrs|Ms|Miss|Dr|Shri|Smt)\.?\s+/i, "").trim()
+    : null;
+
+  // Branch — keep the first line only (some passbooks show branch + address)
+  const branchRaw = findField(text, ["Branch"]);
+  const branchName = branchRaw ? branchRaw.split(/\s{2,}|,/)[0]!.trim() : null;
+
+  // Branch code
+  const branchCode = findField(text, ["Code", "Branch Code"]);
+
+  // A/c Opening date
+  const opening = findField(text, [
+    "A/c Opening Dt",
+    "Account Opening Date",
+    "Opening Date",
+    "Date of Opening",
+  ]);
+  const openMatch = opening?.match(/(\d{2}[\/-]\d{2}[\/-]\d{4})/);
+  const accountOpeningDate = openMatch ? openMatch[1]!.replace(/-/g, "/") : null;
+
+  const bankName = bankNameFromIfsc(cleanedIfsc);
+
+  return {
+    text,
+    data: {
+      bankName,
+      accountHolderName,
+      cifNumber: cif,
+      accountNumber,
+      accountType,
+      ifsc: cleanedIfsc,
+      micr,
+      branchName,
+      branchCode: branchCode ? branchCode.replace(/\D/g, "") || branchCode : null,
+      accountOpeningDate,
+    },
+  };
+}
+
+export async function extractPassbook(
+  buffer: Buffer,
+  mimeType: string,
+): Promise<PassbookOcrResult> {
+  const ext = fileExtFor(mimeType);
+  const result = await runMarker(buffer, `passbook.${ext}`, mimeType, "passbook");
+
+  const blocks = result.json?.children ?? [];
+  const html = blocks.map((b) => b.html ?? "").join("\n");
+
+  const { text, data } = parsePassbookFields(html);
+
+  return {
+    ...data,
+    rawText: text.length > 4000 ? text.slice(0, 4000) : text,
   };
 }
