@@ -1,4 +1,3 @@
-import FormData from "form-data";
 import { logger } from "./logger";
 
 const BASE_URL = process.env["DATALAB_BASE_URL"] || "https://www.datalab.to";
@@ -62,27 +61,41 @@ async function submitDoc(
   mimeType: string,
 ): Promise<string> {
   const form = new FormData();
-  form.append("file", buffer, { filename, contentType: mimeType });
+  const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
+  form.append("file", blob, filename);
   form.append("mode", "accurate");
   form.append("output_format", "markdown");
   form.append("page_schema", JSON.stringify(AADHAR_SCHEMA));
 
-  const headers = {
-    "X-API-Key": API_KEY,
-    ...form.getHeaders(),
-  };
-
   const res = await fetch(`${BASE_URL}/api/v1/extract`, {
     method: "POST",
-    headers,
-    body: form as unknown as ReadableStream,
+    headers: { "X-API-Key": API_KEY },
+    body: form,
   });
-  const data = (await res.json()) as {
-    request_id?: string;
-    error?: string;
-  };
-  if (!data.request_id) {
-    throw new Error(data.error || "Failed to submit document to OCR service");
+
+  const rawText = await res.text();
+  let data: { request_id?: string; error?: string; success?: boolean } = {};
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    logger.error(
+      { status: res.status, body: rawText.slice(0, 500) },
+      "Datalab returned non-JSON response",
+    );
+    throw new Error(
+      `Datalab returned HTTP ${res.status}: ${rawText.slice(0, 200)}`,
+    );
+  }
+
+  if (!res.ok || !data.request_id) {
+    logger.error(
+      { status: res.status, datalab: data },
+      "Datalab submit failed",
+    );
+    throw new Error(
+      data.error ||
+        `Datalab submit failed (HTTP ${res.status}): ${JSON.stringify(data).slice(0, 200)}`,
+    );
   }
   return data.request_id;
 }
