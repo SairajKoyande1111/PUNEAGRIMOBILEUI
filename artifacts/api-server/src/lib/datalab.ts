@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { logger } from "./logger";
 
 const BASE_URL = process.env["DATALAB_BASE_URL"] || "https://www.datalab.to";
@@ -8,32 +9,36 @@ const AADHAR_SCHEMA = {
   properties: {
     name: {
       type: "string",
-      description: "Full name of the cardholder as printed on the Aadhaar card",
+      description:
+        "Full name of the Aadhaar cardholder, in English, exactly as printed (e.g. 'Aniket Sanjay Rane'). The name appears in two places on an Indian e-Aadhaar: (1) at the top after 'To' / addressee block, and (2) on the photo side just above 'DOB' / 'Date of Birth'. Return the English-language version, not the Hindi one. Do NOT return the recipient salutation or 'To'.",
     },
     aadhaar_number: {
       type: "string",
       description:
-        "12-digit Aadhaar number. Return digits only with no spaces.",
+        "12-digit Aadhaar number, printed in the format 'XXXX XXXX XXXX' near the bottom of each half of the card. Return digits only, no spaces (e.g. '401593292039').",
     },
     date_of_birth: {
       type: "string",
-      description: "Date of birth in DD/MM/YYYY format if visible",
+      description:
+        "Date of birth printed as 'DOB:' or 'जन्म तिथि / Date of Birth :' on the photo side. Return in DD/MM/YYYY format (e.g. '23/03/2001').",
     },
     gender: {
       type: "string",
-      description: "Gender (Male / Female / Other)",
+      description:
+        "Gender printed below the date of birth on the photo side. Return one of: Male, Female, Transgender.",
     },
     address: {
       type: "string",
       description:
-        "Full address as printed on the back of the card. Single line, comma separated.",
+        "Full postal address from the addressee block at the top half of the card (after 'To' / 'पता'). Includes street/flat, building, locality, city, district, state, and PIN code. Return as a single line with parts separated by commas (e.g. 'Flat No 305, A Wing, B Floor, Hubtown Greenwood A CHS, Vartak Nagar, Thane West, Thane, Maharashtra - 400606'). Do NOT include the recipient name in the address.",
     },
     mobile_number: {
       type: "string",
       description:
-        "10-digit mobile number if visible on the card. Otherwise empty string.",
+        "10-digit Indian mobile number if visible anywhere on the card. Otherwise return empty string.",
     },
   },
+  required: ["name", "aadhaar_number", "date_of_birth", "gender", "address"],
 };
 
 type ExtractFields = {
@@ -145,6 +150,62 @@ function pickFromText(text: string): ExtractFields {
       maleFemale[1]!.slice(1).toLowerCase();
   }
   return fields;
+}
+
+/**
+ * Crop the cardholder's face photo from the e-Aadhaar card image.
+ *
+ * The standard e-Aadhaar layout is portrait, with the addressee block on the
+ * top half and the photo card on the bottom half. The passport-size photo
+ * sits in the bottom-left of that lower half.
+ *
+ * Returns a JPEG base64 string of just the face region, or null if the crop
+ * fails (e.g. unusual image). The caller can fall back to the full card image.
+ */
+export async function cropAadharFace(
+  buffer: Buffer,
+): Promise<{ base64: string; mimeType: string } | null> {
+  try {
+    const image = sharp(buffer, { failOn: "none" }).rotate(); // auto-orient via EXIF
+    const meta = await image.metadata();
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    if (width < 100 || height < 100) return null;
+
+    // Layout assumption: portrait e-Aadhaar.
+    // Bottom half = bottom 50% of the image.
+    // Photo region within the bottom half:
+    //   x: 4% to 32% of width  (≈ 28% wide)
+    //   y: 56% to 80% of height (≈ 24% tall, in the upper part of the bottom half)
+    let left = Math.round(width * 0.04);
+    let top = Math.round(height * 0.56);
+    let cropW = Math.round(width * 0.28);
+    let cropH = Math.round(height * 0.24);
+
+    // For landscape uploads (rare), fall back to a centered square in the
+    // upper-right region where the printed face usually sits.
+    if (width > height) {
+      left = Math.round(width * 0.04);
+      top = Math.round(height * 0.18);
+      cropW = Math.round(width * 0.18);
+      cropH = Math.round(height * 0.55);
+    }
+
+    // Clamp to image bounds.
+    cropW = Math.min(cropW, width - left);
+    cropH = Math.min(cropH, height - top);
+    if (cropW <= 0 || cropH <= 0) return null;
+
+    const out = await image
+      .extract({ left, top, width: cropW, height: cropH })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    return { base64: out.toString("base64"), mimeType: "image/jpeg" };
+  } catch (err) {
+    logger.warn({ err }, "cropAadharFace failed");
+    return null;
+  }
 }
 
 export async function extractAadhar(

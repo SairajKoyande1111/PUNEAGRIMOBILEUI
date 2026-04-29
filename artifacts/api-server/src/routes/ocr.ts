@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { extractAadhar } from "../lib/datalab";
+import { cropAadharFace, extractAadhar } from "../lib/datalab";
 import { setAadharOnUser } from "../lib/mongo";
 
 const router: IRouter = Router();
@@ -26,12 +26,17 @@ router.post("/ocr/aadhar", async (req, res) => {
     }
 
     req.log.info({ phone, size: buffer.length }, "Running Aadhaar OCR");
-    const ocr = await extractAadhar(buffer, mimeType);
+
+    // Run OCR + face crop in parallel — they don't depend on each other.
+    const [ocr, face] = await Promise.all([
+      extractAadhar(buffer, mimeType),
+      cropAadharFace(buffer),
+    ]);
 
     const aadhar = {
       ...ocr,
-      photoBase64: cleanBase64,
-      photoMimeType: mimeType,
+      photoBase64: face?.base64 ?? cleanBase64,
+      photoMimeType: face?.mimeType ?? mimeType,
     };
 
     const doc = await setAadharOnUser(phone, aadhar);
