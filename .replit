@@ -49,7 +49,7 @@ waitForPort = 18115
 outputType = "webview"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
@@ -71,5 +71,4 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
-MONGODB_URI = "mongodb+srv://sairajkoyande_db_user:5QlrqFxJrJmM9rR4@cluster0.akmevxg.mongodb.net/?appName=Cluster0"
 DATALAB_BASE_URL = "https://www.datalab.to"
