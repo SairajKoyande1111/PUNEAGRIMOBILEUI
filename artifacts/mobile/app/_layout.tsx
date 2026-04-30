@@ -11,10 +11,15 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 
+// Keep the existing setBaseUrl call for the legacy api-client-react (used by React Query).
+// Also expose the new API base URL for direct fetch calls.
 const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
 if (apiDomain) {
   setBaseUrl(`https://${apiDomain}`);
 }
+export const API_BASE: string =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (apiDomain ? `https://${apiDomain}` : "http://localhost:8080");
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";

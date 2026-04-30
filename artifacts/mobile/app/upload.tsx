@@ -13,392 +13,406 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ocrAadhar, ocrPassbook } from "@workspace/api-client-react";
 
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
+import {
+  type DocType,
+  type ExtractStage,
+  extractDocument,
+} from "@/hooks/useDocumentExtract";
+
+// ─── Document catalogue ───────────────────────────────────────────────────────
 
 type DocItem = {
   id: string;
+  apiType: DocType;
   title: string;
   description: string;
   icon: keyof typeof Feather.glyphMap;
+  required: boolean;
 };
 
 const DOCUMENTS: DocItem[] = [
   {
-    id: "form_7a",
-    title: "Form 7/12",
-    description: "Land record extract",
-    icon: "file-text",
-  },
-  {
-    id: "form_12a_8a",
-    title: "Form 8A",
-    description: "Khata extract / land details",
-    icon: "file-text",
-  },
-  {
     id: "aadhar",
+    apiType: "aadhar",
     title: "Aadhaar Card",
     description: "Both sides clearly visible",
     icon: "credit-card",
+    required: true,
   },
   {
     id: "bank_passbook",
+    apiType: "bank_passbook",
     title: "Bank Passbook",
     description: "First page with account number",
     icon: "book",
+    required: false,
+  },
+  {
+    id: "form_7",
+    apiType: "form7",
+    title: "Form 7/12",
+    description: "Land ownership record (अधिकार अभिलेख)",
+    icon: "file-text",
+    required: false,
+  },
+  {
+    id: "form_8a",
+    apiType: "form8a",
+    title: "Form 8A",
+    description: "Holding register (खाते उतारा)",
+    icon: "layers",
+    required: false,
+  },
+  {
+    id: "form_12",
+    apiType: "form12",
+    title: "Form 12",
+    description: "Crop inspection register (पीक पाहणी)",
+    icon: "grid",
+    required: false,
   },
 ];
+
+// ─── Status colours ───────────────────────────────────────────────────────────
+
+function stageColor(
+  stage: ExtractStage,
+  colors: ReturnType<typeof useColors>,
+): string {
+  switch (stage) {
+    case "uploading":
+    case "processing":
+      return colors.accent;
+    case "done":
+      return colors.success;
+    case "error":
+      return colors.destructive;
+    default:
+      return colors.mutedForeground;
+  }
+}
+
+function stageLabel(stage: ExtractStage): string {
+  switch (stage) {
+    case "uploading":
+      return "Uploading…";
+    case "processing":
+      return "Reading document…";
+    case "done":
+      return "Saved ✓";
+    case "error":
+      return "Failed";
+    default:
+      return "";
+  }
+}
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function UploadScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { phone, documents, setDocument, finishDocuments } = useAuth();
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState<boolean>(false);
-  type OcrStatus = "idle" | "scanning" | "done" | "error";
-  const [aadharStatus, setAadharStatus] = useState<OcrStatus>("idle");
-  const [aadharError, setAadharError] = useState<string | null>(null);
-  const [passbookStatus, setPassbookStatus] = useState<OcrStatus>("idle");
-  const [passbookError, setPassbookError] = useState<string | null>(null);
+
+  const [stages, setStages] = useState<Record<string, ExtractStage>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  const setStage = (id: string, stage: ExtractStage) =>
+    setStages((prev) => ({ ...prev, [id]: stage }));
 
   const uploadedCount = useMemo(
     () => DOCUMENTS.filter((d) => documents[d.id]).length,
     [documents],
   );
-  const aadharUploaded = !!documents["aadhar"];
-  const anyScanning =
-    aadharStatus === "scanning" || passbookStatus === "scanning";
-  const canSubmit = aadharUploaded && !anyScanning;
 
-  const runAadharOcr = async (asset: ImagePicker.ImagePickerAsset) => {
+  const aadharDone = !!documents["aadhar"];
+  const anyBusy = Object.values(stages).some(
+    (s) => s === "uploading" || s === "processing",
+  );
+
+  // ── Pick image and trigger extraction ──────────────────────────────────────
+
+  const handlePick = async (doc: DocItem) => {
     if (!phone) {
-      Alert.alert("Error", "Missing phone number, please log in again.");
+      Alert.alert("Error", "No phone number found. Please log in again.");
       return;
     }
-    if (!asset.base64) {
-      Alert.alert("Error", "Could not read image. Please try a different photo.");
-      return;
-    }
-    setAadharStatus("scanning");
-    setAadharError(null);
-    try {
-      await ocrAadhar({
-        phone,
-        imageBase64: asset.base64,
-        mimeType: asset.mimeType ?? "image/jpeg",
-      });
-      setAadharStatus("done");
-      if (Platform.OS !== "web") {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      }
-    } catch (e) {
-      setAadharStatus("error");
-      const msg =
-        e instanceof Error ? e.message : "Could not read Aadhaar card.";
-      setAadharError(msg);
-    }
-  };
 
-  const runPassbookOcr = async (asset: ImagePicker.ImagePickerAsset) => {
-    if (!phone) {
-      Alert.alert("Error", "Missing phone number, please log in again.");
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        "Permission required",
+        "Please allow access to your photo library in Settings.",
+      );
       return;
     }
-    if (!asset.base64) {
-      Alert.alert("Error", "Could not read image. Please try a different photo.");
-      return;
-    }
-    setPassbookStatus("scanning");
-    setPassbookError(null);
-    try {
-      await ocrPassbook({
-        phone,
-        imageBase64: asset.base64,
-        mimeType: asset.mimeType ?? "image/jpeg",
-      });
-      setPassbookStatus("done");
-      if (Platform.OS !== "web") {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      }
-    } catch (e) {
-      setPassbookStatus("error");
-      const msg =
-        e instanceof Error ? e.message : "Could not read passbook.";
-      setPassbookError(msg);
-    }
-  };
 
-  const pick = async (id: string) => {
-    if (busyId) return;
-    setBusyId(id);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.88,
+      allowsEditing: false,
+      base64: false,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    const mimeType = asset.mimeType ?? "image/jpeg";
+
+    setStage(doc.id, "uploading");
+
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(
-          "Permission required",
-          "Please allow photo library access to upload documents.",
-        );
-        return;
-      }
-      const needsBase64 = id === "aadhar" || id === "bank_passbook";
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: false,
-        quality: 0.8,
-        base64: needsBase64,
-      });
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        await setDocument(id, asset.uri);
+      const outcome = await extractDocument(
+        phone,
+        doc.apiType,
+        asset.uri,
+        mimeType,
+        (s) => setStage(doc.id, s),
+      );
+
+      if (outcome.saved) {
+        await setDocument(doc.id, asset.uri);
         if (Platform.OS !== "web") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
-        if (id === "aadhar") {
-          await runAadharOcr(asset);
-        } else if (id === "bank_passbook") {
-          await runPassbookOcr(asset);
-        }
+      } else {
+        setStage(doc.id, "error");
+        Alert.alert(
+          "Could not save",
+          outcome.error ??
+            "The document was uploaded but data could not be saved. Please try a clearer photo.",
+        );
       }
     } catch (e) {
-      Alert.alert("Upload failed", "Please try again.");
-    } finally {
-      setBusyId(null);
+      setStage(doc.id, "error");
+      const msg = e instanceof Error ? e.message : "Upload failed";
+      Alert.alert("Upload failed", msg);
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
     }
   };
 
-  const onContinue = async () => {
-    if (!canSubmit || submitting) return;
+  // ── Finish ─────────────────────────────────────────────────────────────────
+
+  const handleFinish = async () => {
+    if (!aadharDone || anyBusy || submitting) return;
     setSubmitting(true);
     if (Platform.OS !== "web") {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
-    await new Promise((r) => setTimeout(r, 200));
     await finishDocuments();
     setSubmitting(false);
   };
 
   const webTopInset = Platform.OS === "web" ? 67 : 0;
   const webBottomInset = Platform.OS === "web" ? 34 : 0;
-  const progress = uploadedCount / DOCUMENTS.length;
-
-  const submitLabel = (() => {
-    if (submitting) return "Submitting...";
-    if (aadharStatus === "scanning") return "Reading Aadhaar...";
-    if (passbookStatus === "scanning") return "Reading passbook...";
-    if (!aadharUploaded) return "Upload Aadhaar to continue";
-    return "Submit & Continue";
-  })();
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <ScrollView
         contentContainerStyle={{
           paddingTop: insets.top + 16 + webTopInset,
-          paddingBottom: insets.bottom + 140 + webBottomInset,
+          paddingBottom: insets.bottom + 120 + webBottomInset,
           paddingHorizontal: 20,
         }}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={[styles.eyebrow, { color: colors.primary }]}>
-          Step 3 of 3
-        </Text>
+        {/* Header */}
         <Text style={[styles.title, { color: colors.foreground }]}>
-          Upload documents
+          Upload Documents
         </Text>
         <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-          Aadhaar card is required — the rest are optional. Make sure all text
-          is clearly readable.
+          Upload your documents to auto-fill your profile. Aadhaar is required;
+          all others are optional.
         </Text>
 
+        {/* Progress pill */}
         <View
           style={[
-            styles.progressTrack,
-            { backgroundColor: colors.muted, borderRadius: 999 },
+            styles.progressPill,
+            { backgroundColor: colors.secondary },
           ]}
         >
-          <View
-            style={[
-              styles.progressFill,
-              {
-                backgroundColor: colors.primary,
-                width: `${progress * 100}%`,
-                borderRadius: 999,
-              },
-            ]}
+          <Feather
+            name="check-circle"
+            size={14}
+            color={
+              uploadedCount === DOCUMENTS.length
+                ? colors.success
+                : colors.primary
+            }
           />
+          <Text
+            style={[styles.progressText, { color: colors.primary }]}
+          >
+            {uploadedCount} of {DOCUMENTS.length} uploaded
+          </Text>
         </View>
-        <Text style={[styles.progressText, { color: colors.mutedForeground }]}>
-          {uploadedCount} of {DOCUMENTS.length} uploaded
-        </Text>
 
-        <View style={{ height: 24 }} />
-
+        {/* Document cards */}
         {DOCUMENTS.map((doc) => {
-          const uploaded = !!documents[doc.id];
-          const isBusy = busyId === doc.id;
-          const isAadhar = doc.id === "aadhar";
-          const isPassbook = doc.id === "bank_passbook";
-          let subText = uploaded
-            ? "Uploaded · Tap to replace"
-            : doc.description;
-          let subColor = uploaded ? colors.success : colors.mutedForeground;
-
-          if (isAadhar) {
-            if (aadharStatus === "scanning") {
-              subText = "Reading details with OCR...";
-              subColor = colors.primary;
-            } else if (aadharStatus === "done") {
-              subText = "Details extracted ✓ Tap to replace";
-              subColor = colors.success;
-            } else if (aadharStatus === "error") {
-              subText = aadharError || "OCR failed · Tap to retry";
-              subColor = colors.destructive;
-            }
-          } else if (isPassbook) {
-            if (passbookStatus === "scanning") {
-              subText = "Reading bank details with OCR...";
-              subColor = colors.primary;
-            } else if (passbookStatus === "done") {
-              subText = "Bank details extracted ✓ Tap to replace";
-              subColor = colors.success;
-            } else if (passbookStatus === "error") {
-              subText = passbookError || "OCR failed · Tap to retry";
-              subColor = colors.destructive;
-            }
-          }
-
-          const cardScanning =
-            (isAadhar && aadharStatus === "scanning") ||
-            (isPassbook && passbookStatus === "scanning");
+          const isDone = !!documents[doc.id];
+          const stage = stages[doc.id] ?? "idle";
+          const busy = stage === "uploading" || stage === "processing";
 
           return (
             <Pressable
               key={doc.id}
-              onPress={() => pick(doc.id)}
-              disabled={isBusy || cardScanning}
+              onPress={() => !busy && handlePick(doc)}
               style={({ pressed }) => [
-                styles.docCard,
+                styles.card,
                 {
                   backgroundColor: colors.card,
-                  borderColor: uploaded ? colors.primary : colors.border,
+                  borderColor: isDone
+                    ? colors.success
+                    : stage === "error"
+                      ? colors.destructive
+                      : colors.border,
                   borderRadius: 16,
-                  opacity: pressed ? 0.92 : 1,
+                  opacity: pressed && !busy ? 0.88 : 1,
                 },
               ]}
             >
+              {/* Icon badge */}
               <View
                 style={[
-                  styles.docIconWrap,
+                  styles.iconBadge,
                   {
-                    backgroundColor: uploaded
-                      ? colors.primary
-                      : colors.secondary,
-                    borderRadius: 12,
+                    backgroundColor: isDone
+                      ? `${colors.success}18`
+                      : `${colors.primary}12`,
                   },
                 ]}
               >
-                {isBusy || cardScanning ? (
+                {busy ? (
                   <ActivityIndicator
-                    color={uploaded ? colors.primaryForeground : colors.primary}
+                    size="small"
+                    color={colors.accent}
                   />
                 ) : (
                   <Feather
-                    name={uploaded ? "check" : doc.icon}
+                    name={isDone ? "check" : doc.icon}
                     size={22}
-                    color={
-                      uploaded ? colors.primaryForeground : colors.primary
-                    }
+                    color={isDone ? colors.success : colors.primary}
                   />
                 )}
               </View>
 
-              <View style={styles.docTextWrap}>
+              {/* Text */}
+              <View style={{ flex: 1 }}>
                 <View style={styles.titleRow}>
                   <Text
-                    style={[styles.docTitle, { color: colors.foreground }]}
+                    style={[
+                      styles.cardTitle,
+                      { color: colors.foreground },
+                    ]}
                   >
                     {doc.title}
                   </Text>
-                  {isAadhar ? (
+                  {doc.required && (
                     <View
                       style={[
                         styles.requiredBadge,
-                        { backgroundColor: colors.primary, borderRadius: 6 },
+                        { backgroundColor: `${colors.accent}18` },
                       ]}
                     >
                       <Text
                         style={[
                           styles.requiredText,
-                          { color: colors.primaryForeground },
+                          { color: colors.accent },
                         ]}
                       >
-                        REQUIRED
+                        Required
                       </Text>
                     </View>
-                  ) : null}
+                  )}
                 </View>
                 <Text
-                  style={[styles.docSubtitle, { color: subColor }]}
-                  numberOfLines={2}
+                  style={[
+                    styles.cardDesc,
+                    {
+                      color: busy
+                        ? stageColor(stage, colors)
+                        : colors.mutedForeground,
+                    },
+                  ]}
                 >
-                  {subText}
+                  {busy ? stageLabel(stage) : doc.description}
                 </Text>
+                {stage === "error" && (
+                  <Text
+                    style={[
+                      styles.errorHint,
+                      { color: colors.destructive },
+                    ]}
+                  >
+                    Tap to retry
+                  </Text>
+                )}
               </View>
 
-              <Feather
-                name={uploaded ? "edit-2" : "upload"}
-                size={18}
-                color={colors.mutedForeground}
-              />
+              {/* Chevron */}
+              {!busy && (
+                <Feather
+                  name={isDone ? "refresh-cw" : "chevron-right"}
+                  size={18}
+                  color={
+                    isDone ? colors.mutedForeground : colors.primary
+                  }
+                />
+              )}
             </Pressable>
           );
         })}
       </ScrollView>
 
+      {/* Bottom CTA */}
       <View
         style={[
           styles.footer,
           {
-            paddingBottom: insets.bottom + 16 + webBottomInset,
             backgroundColor: colors.background,
+            paddingBottom: insets.bottom + 16 + webBottomInset,
             borderTopColor: colors.border,
           },
         ]}
       >
         <Pressable
-          onPress={onContinue}
-          disabled={!canSubmit || submitting}
+          onPress={handleFinish}
+          disabled={!aadharDone || anyBusy || submitting}
           style={({ pressed }) => [
-            styles.button,
+            styles.ctaBtn,
             {
-              backgroundColor: canSubmit ? colors.primary : colors.muted,
+              backgroundColor:
+                aadharDone && !anyBusy
+                  ? colors.primary
+                  : colors.muted,
               borderRadius: 14,
-              opacity: pressed ? 0.9 : 1,
+              opacity: pressed ? 0.88 : 1,
             },
           ]}
         >
-          <Text
-            style={[
-              styles.buttonText,
-              {
-                color: canSubmit
-                  ? colors.primaryForeground
-                  : colors.mutedForeground,
-              },
-            ]}
-          >
-            {submitLabel}
-          </Text>
-          {canSubmit && !submitting ? (
-            <Feather
-              name="arrow-right"
-              size={18}
-              color={colors.primaryForeground}
-            />
-          ) : null}
+          {submitting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text
+              style={[
+                styles.ctaText,
+                {
+                  color:
+                    aadharDone && !anyBusy
+                      ? colors.primaryForeground
+                      : colors.mutedForeground,
+                },
+              ]}
+            >
+              {aadharDone ? "Continue to Profile" : "Upload Aadhaar to continue"}
+            </Text>
+          )}
         </Pressable>
       </View>
     </View>
@@ -407,92 +421,92 @@ export default function UploadScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  eyebrow: {
-    fontSize: 12,
-    fontFamily: "Inter_600SemiBold",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    marginBottom: 8,
-  },
   title: {
     fontSize: 28,
     fontFamily: "Inter_700Bold",
     letterSpacing: -0.6,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: "Inter_400Regular",
-    lineHeight: 22,
-    marginBottom: 24,
+    lineHeight: 20,
+    marginBottom: 16,
   },
-  progressTrack: {
-    height: 6,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-  },
-  progressText: {
-    marginTop: 8,
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
-  },
-  docCard: {
+  progressPill: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 14,
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    marginBottom: 20,
+  },
+  progressText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    padding: 16,
     marginBottom: 12,
     borderWidth: 1.5,
-    gap: 14,
   },
-  docIconWrap: {
+  iconBadge: {
     width: 48,
     height: 48,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  docTextWrap: { flex: 1 },
   titleRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginBottom: 4,
+    marginBottom: 3,
   },
-  docTitle: {
-    fontSize: 16,
+  cardTitle: {
+    fontSize: 15,
     fontFamily: "Inter_600SemiBold",
   },
   requiredBadge: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 2,
+    borderRadius: 6,
   },
   requiredText: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: "Inter_700Bold",
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
-  docSubtitle: {
+  cardDesc: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
+    lineHeight: 18,
+  },
+  errorHint: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    marginTop: 2,
   },
   footer: {
     position: "absolute",
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    padding: 16,
     borderTopWidth: 1,
   },
-  button: {
-    height: 56,
-    flexDirection: "row",
+  ctaBtn: {
+    height: 54,
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
   },
-  buttonText: {
+  ctaText: {
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
   },

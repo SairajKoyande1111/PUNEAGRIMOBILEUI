@@ -8,6 +8,8 @@ import React, {
   useState,
 } from "react";
 
+import { ensureProfile } from "@/hooks/useDocumentExtract";
+
 type Stage = "phone" | "otp" | "documents" | "ready";
 
 type AuthState = {
@@ -76,6 +78,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const verifyOtp = useCallback(async () => {
+    // Ensure a MongoDB profile exists for this phone number
+    if (state.phone) {
+      await ensureProfile(state.phone);
+    }
     await persist({ ...state, stage: "documents" });
   }, [persist, state]);
 
