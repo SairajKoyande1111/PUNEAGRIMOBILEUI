@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import { API_BASE } from "@/app/_layout";
 
 export type DocType =
@@ -37,14 +38,31 @@ export async function extractDocument(
 ): Promise<ProfileSection> {
   onStage?.("uploading");
 
-  // Build multipart/form-data — React Native's fetch handles this natively
+  // Build multipart/form-data
+  // Web browsers and React Native handle file uploads VERY differently.
+  // - On native, fetch() understands a special { uri, name, type } object.
+  // - On web, that object is meaningless — the browser's FormData needs a
+  //   real Blob/File, so we have to fetch the local URI first.
   const formData = new FormData();
   const ext = mimeType.split("/")[1] ?? "jpg";
-  formData.append("file", {
-    uri: imageUri,
-    name: `document.${ext}`,
-    type: mimeType,
-  } as unknown as Blob);
+  const filename = `document.${ext}`;
+
+  if (Platform.OS === "web") {
+    // expo-image-picker on web hands us a `blob:` or `data:` URL
+    const res = await fetch(imageUri);
+    const blob = await res.blob();
+    const file =
+      typeof File !== "undefined"
+        ? new File([blob], filename, { type: mimeType })
+        : blob;
+    formData.append("file", file, filename);
+  } else {
+    formData.append("file", {
+      uri: imageUri,
+      name: filename,
+      type: mimeType,
+    } as unknown as Blob);
+  }
   formData.append("document_type", docType);
   formData.append("profile_phone", phone);
   formData.append("mode", "accurate");
